@@ -1,0 +1,392 @@
+
+<div style="width:100%;height:600px;position:relative;overflow:hidden;border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary);">
+  <canvas id="c" style="display:block;width:100%;height:100%;"></canvas>
+  <div id="ui" style="position:absolute;top:10px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:10;">
+    <div style="background:rgba(0,0,0,0.55);color:#fff;padding:6px 14px;border-radius:20px;font-size:13px;letter-spacing:.3px;">🏛️ พิพิธภัณฑ์อินเดีย — WASD / ลูกศร เพื่อเดิน</div>
+  </div>
+  <div id="panel" style="position:absolute;top:10px;right:10px;background:rgba(30,18,5,0.82);border:1px solid #c8922a;border-radius:10px;padding:12px 14px;z-index:10;width:190px;">
+    <div style="color:#f5c97a;font-size:13px;font-weight:500;margin-bottom:8px;">🖼️ อัปโหลดรูปภาพ</div>
+    <div style="color:#ccc;font-size:11px;margin-bottom:8px;">เลือกกรอบบนผนัง แล้วอัปโหลดรูป</div>
+    <select id="frameSelect" style="width:100%;margin-bottom:8px;padding:4px 6px;font-size:12px;background:#1a1005;color:#f5c97a;border:1px solid #c8922a;border-radius:6px;">
+      <option value="">— เลือกกรอบ —</option>
+      <option value="0">กรอบที่ 1 (ผนังเหนือ)</option>
+      <option value="1">กรอบที่ 2 (ผนังเหนือ)</option>
+      <option value="2">กรอบที่ 3 (ผนังใต้)</option>
+      <option value="3">กรอบที่ 4 (ผนังใต้)</option>
+      <option value="4">กรอบที่ 5 (ผนังตะวันออก)</option>
+      <option value="5">กรอบที่ 6 (ผนังตะวันตก)</option>
+    </select>
+    <label style="display:block;background:#c8922a;color:#1a0a00;text-align:center;padding:6px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">
+      เลือกรูปภาพ
+      <input type="file" id="imgInput" accept="image/*" style="display:none;">
+    </label>
+    <div id="frameStatus" style="color:#aaa;font-size:11px;margin-top:6px;text-align:center;"></div>
+  </div>
+  <div id="crosshair" style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:16px;height:16px;pointer-events:none;z-index:5;">
+    <div style="position:absolute;left:7px;top:0;width:2px;height:16px;background:rgba(255,255,255,0.7);border-radius:1px;"></div>
+    <div style="position:absolute;top:7px;left:0;height:2px;width:16px;background:rgba(255,255,255,0.7);border-radius:1px;"></div>
+  </div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+const canvas = document.getElementById('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+const W = canvas.parentElement.clientWidth;
+const H = canvas.parentElement.clientHeight;
+renderer.setSize(W, H);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a0d02);
+scene.fog = new THREE.Fog(0x1a0d02, 12, 30);
+
+const cam = new THREE.PerspectiveCamera(70, W/H, 0.1, 60);
+cam.position.set(0, 1.7, 0);
+
+// --- Canvas textures ---
+function makePatternTex(fn, size=512) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  fn(cv.getContext('2d'), size);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+
+const wallTex = makePatternTex((ctx, s) => {
+  ctx.fillStyle = '#7a4010';
+  ctx.fillRect(0,0,s,s);
+  // Mughal arch pattern
+  ctx.strokeStyle = '#c8922a';
+  ctx.lineWidth = 2;
+  for(let y=0;y<s;y+=80){
+    for(let x=0;x<s;x+=60){
+      ctx.beginPath();
+      ctx.moveTo(x+10,y+80);
+      ctx.lineTo(x+10,y+30);
+      ctx.bezierCurveTo(x+10,y+5,x+50,y+5,x+50,y+30);
+      ctx.lineTo(x+50,y+80);
+      ctx.stroke();
+      // inner detail
+      ctx.beginPath();
+      ctx.arc(x+30,y+30,8,0,Math.PI,true);
+      ctx.stroke();
+      // lotus petals
+      for(let p=0;p<6;p++){
+        const a=p*Math.PI/3, r=18;
+        ctx.beginPath();
+        ctx.ellipse(x+30+Math.cos(a)*r,y+60+Math.sin(a)*r,5,9,a,0,Math.PI*2);
+        ctx.strokeStyle='rgba(200,146,42,0.4)';
+        ctx.stroke();
+      }
+      ctx.strokeStyle='#c8922a';
+    }
+  }
+  // Fine grid overlay
+  ctx.strokeStyle='rgba(200,146,42,0.15)';
+  ctx.lineWidth=0.5;
+  for(let i=0;i<s;i+=20){ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i,s);ctx.stroke();}
+  for(let i=0;i<s;i+=20){ctx.beginPath();ctx.moveTo(0,i);ctx.lineTo(s,i);ctx.stroke();}
+});
+wallTex.repeat.set(4,2);
+
+const floorTex = makePatternTex((ctx, s) => {
+  ctx.fillStyle = '#3d2008';
+  ctx.fillRect(0,0,s,s);
+  const cols=['#5a3010','#4a2808','#6a3818','#3d2008'];
+  const ts=64;
+  for(let y=0;y<s;y+=ts){
+    for(let x=0;x<s;x+=ts){
+      ctx.fillStyle=cols[((x/ts)+(y/ts))%4];
+      ctx.fillRect(x+1,y+1,ts-2,ts-2);
+      // mandala center dot
+      ctx.beginPath();
+      ctx.arc(x+ts/2,y+ts/2,6,0,Math.PI*2);
+      ctx.fillStyle='rgba(200,146,42,0.3)';
+      ctx.fill();
+      // border detail
+      ctx.strokeStyle='rgba(200,146,42,0.5)';
+      ctx.lineWidth=1;
+      ctx.strokeRect(x+6,y+6,ts-12,ts-12);
+    }
+  }
+  // Diagonal accent lines
+  ctx.strokeStyle='rgba(200,146,42,0.1)';
+  ctx.lineWidth=1;
+  for(let i=-s;i<s*2;i+=32){
+    ctx.beginPath();ctx.moveTo(i,0);ctx.lineTo(i+s,s);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(i+s,0);ctx.lineTo(i,s);ctx.stroke();
+  }
+});
+floorTex.repeat.set(8,8);
+
+const ceilTex = makePatternTex((ctx, s) => {
+  ctx.fillStyle = '#2d1504';
+  ctx.fillRect(0,0,s,s);
+  // Concentric mandala
+  const cx=s/2,cy=s/2;
+  const colors=['#c8922a','#e8b84a','#a07020','#c8922a'];
+  for(let r=s/2;r>20;r-=30){
+    ctx.beginPath();
+    ctx.arc(cx,cy,r,0,Math.PI*2);
+    ctx.strokeStyle=colors[Math.floor(r/30)%4];
+    ctx.lineWidth=r>200?3:1.5;
+    ctx.stroke();
+  }
+  // Radial spokes
+  for(let a=0;a<Math.PI*2;a+=Math.PI/8){
+    ctx.beginPath();
+    ctx.moveTo(cx+30*Math.cos(a),cy+30*Math.sin(a));
+    ctx.lineTo(cx+s/2*Math.cos(a),cy+s/2*Math.sin(a));
+    ctx.strokeStyle='rgba(200,146,42,0.4)';
+    ctx.lineWidth=1;
+    ctx.stroke();
+  }
+  // Lotus petals near center
+  for(let a=0;a<Math.PI*2;a+=Math.PI/6){
+    ctx.beginPath();
+    ctx.ellipse(cx+40*Math.cos(a),cy+40*Math.sin(a),10,20,a,0,Math.PI*2);
+    ctx.fillStyle='rgba(200,146,42,0.25)';
+    ctx.fill();
+  }
+});
+ceilTex.repeat.set(3,3);
+
+const pillarTex = makePatternTex((ctx,s)=>{
+  ctx.fillStyle='#8b5e2a';
+  ctx.fillRect(0,0,s,s);
+  ctx.strokeStyle='#c8922a';
+  ctx.lineWidth=2;
+  for(let y=0;y<s;y+=40){
+    ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(s,y);ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(s/2,y+20,12,0,Math.PI*2);
+    ctx.strokeStyle='rgba(200,146,42,0.5)';ctx.stroke();
+    ctx.strokeStyle='#c8922a';
+  }
+},256);
+pillarTex.repeat.set(1,3);
+
+// --- Materials ---
+const wallMat = new THREE.MeshLambertMaterial({map:wallTex,side:THREE.BackSide});
+const wallFrontMat = new THREE.MeshLambertMaterial({map:wallTex,side:THREE.FrontSide});
+const floorMat = new THREE.MeshLambertMaterial({map:floorTex});
+const ceilMat = new THREE.MeshLambertMaterial({map:ceilTex,side:THREE.BackSide});
+const pillarMat = new THREE.MeshLambertMaterial({map:pillarTex});
+const goldMat = new THREE.MeshLambertMaterial({color:0xc8922a});
+
+const RW=12, RL=18, RH=5;
+
+// Floor & Ceiling
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(RW,RL), floorMat);
+floor.rotation.x=-Math.PI/2; floor.receiveShadow=true; scene.add(floor);
+const ceil = new THREE.Mesh(new THREE.PlaneGeometry(RW,RL), ceilMat);
+ceil.rotation.x=Math.PI/2; ceil.position.y=RH; scene.add(ceil);
+
+// Walls (box room)
+const room = new THREE.Mesh(new THREE.BoxGeometry(RW,RH,RL), wallMat);
+room.position.y=RH/2; scene.add(room);
+
+// Pillars
+const pillarGeo = new THREE.CylinderGeometry(0.3,0.4,RH,8);
+const capGeo = new THREE.BoxGeometry(1,0.25,1);
+const positions=[[-RW/2+1.5,0,-RL/2+2],[RW/2-1.5,0,-RL/2+2],[-RW/2+1.5,0,0],[RW/2-1.5,0,0],[-RW/2+1.5,0,RL/2-2],[RW/2-1.5,0,RL/2-2]];
+positions.forEach(([x,y,z])=>{
+  const p=new THREE.Mesh(pillarGeo,pillarMat);
+  p.position.set(x,RH/2,z); p.castShadow=true; scene.add(p);
+  const cap=new THREE.Mesh(capGeo,goldMat);
+  cap.position.set(x,RH-0.12,z); scene.add(cap);
+  const base=new THREE.Mesh(capGeo,goldMat);
+  base.position.set(x,0.12,z); scene.add(base);
+});
+
+// Central display pedestal
+const pedGeo=new THREE.BoxGeometry(1.5,1,1.5);
+const pedMat=new THREE.MeshLambertMaterial({color:0x5a3010});
+const ped=new THREE.Mesh(pedGeo,pedMat);
+ped.position.set(0,0.5,0); ped.castShadow=true; scene.add(ped);
+// Vase on pedestal
+const vaseGeo=new THREE.CylinderGeometry(0.2,0.15,0.6,12);
+const vaseMat=new THREE.MeshLambertMaterial({color:0xc85010});
+const vase=new THREE.Mesh(vaseGeo,vaseMat);
+vase.position.set(0,1.3,0); scene.add(vase);
+// Elephant figurine (simplified)
+const elephantBody=new THREE.Mesh(new THREE.SphereGeometry(0.22,8,6),new THREE.MeshLambertMaterial({color:0x8a7060}));
+elephantBody.position.set(0.8,1.22,0.5); elephantBody.scale.set(1,0.8,1.3); scene.add(elephantBody);
+const elephantHead=new THREE.Mesh(new THREE.SphereGeometry(0.15,8,6),new THREE.MeshLambertMaterial({color:0x8a7060}));
+elephantHead.position.set(0.8,1.38,0.78); scene.add(elephantHead);
+const trunk=new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.06,0.35,6),new THREE.MeshLambertMaterial({color:0x8a7060}));
+trunk.position.set(0.8,1.25,0.95); trunk.rotation.x=0.4; scene.add(trunk);
+
+// Decorative arch over entrance
+const archCurve=new THREE.QuadraticBezierCurve3(new THREE.Vector3(-2,3.5,-RL/2),new THREE.Vector3(0,5,-RL/2),new THREE.Vector3(2,3.5,-RL/2));
+const archPts=archCurve.getPoints(20);
+const archGeo=new THREE.BufferGeometry().setFromPoints(archPts);
+const archLine=new THREE.Line(archGeo,new THREE.LineBasicMaterial({color:0xc8922a,linewidth:2}));
+scene.add(archLine);
+
+// Lamps (chandelier style)
+function makeLamp(x,y,z){
+  const g=new THREE.Group();
+  const chain=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.6,4),goldMat);
+  chain.position.set(0,0.3,0); g.add(chain);
+  const shade=new THREE.Mesh(new THREE.ConeGeometry(0.25,0.35,8,1,true),new THREE.MeshLambertMaterial({color:0xe09030,side:THREE.DoubleSide}));
+  shade.position.set(0,-0.1,0); shade.rotation.x=Math.PI; g.add(shade);
+  g.position.set(x,y,z); scene.add(g);
+  const light=new THREE.PointLight(0xffb040,1.2,8);
+  light.position.set(x,y-0.3,z); scene.add(light);
+}
+makeLamp(-3,RH-0.3,-4); makeLamp(3,RH-0.3,-4);
+makeLamp(-3,RH-0.3,4); makeLamp(3,RH-0.3,4);
+makeLamp(0,RH-0.3,0);
+
+// Ambient & directional
+const amb=new THREE.AmbientLight(0x6a3010,0.8); scene.add(amb);
+const sun=new THREE.DirectionalLight(0xffeedd,0.5);
+sun.position.set(2,5,2); sun.castShadow=true; scene.add(sun);
+
+// --- Picture frames ---
+const frames=[];
+const frameDefs=[
+  {pos:[-3.5,2.3,-RW/2*0+0-0.01], rot:[0,0,0], wf:true},
+  {pos:[3.5,2.3,0-0.01], rot:[0,0,0], wf:true},
+];
+// North wall (z=-RL/2+0.05)
+const NZ=-RL/2+0.05;
+const SZ=RL/2-0.05;
+const EX=RW/2-0.05;
+const WX=-RW/2+0.05;
+
+const frameDef2=[
+  {pos:[-2.5,2.5,NZ],rot:[0,0,0],normal:[0,0,1]},
+  {pos:[2.5,2.5,NZ],rot:[0,0,0],normal:[0,0,1]},
+  {pos:[-2.5,2.5,SZ],rot:[0,Math.PI,0],normal:[0,0,-1]},
+  {pos:[2.5,2.5,SZ],rot:[0,Math.PI,0],normal:[0,0,-1]},
+  {pos:[EX,2.5,0],rot:[0,-Math.PI/2,0],normal:[-1,0,0]},
+  {pos:[WX,2.5,0],rot:[0,Math.PI/2,0],normal:[1,0,0]},
+];
+
+const frameW=1.6, frameH=1.2, frameBorder=0.08;
+const defaultColors=[0x8b5e2a,0x7a4a1a,0x6a3a0a,0x9b6e3a,0xb07840,0x5a2e08];
+
+frameDef2.forEach((fd,i)=>{
+  const g=new THREE.Group();
+  // Frame border
+  [[0,frameH/2+frameBorder/2,0,frameW+frameBorder*2,frameBorder,frameBorder],
+   [0,-frameH/2-frameBorder/2,0,frameW+frameBorder*2,frameBorder,frameBorder],
+   [-frameW/2-frameBorder/2,0,0,frameBorder,frameH,frameBorder],
+   [frameW/2+frameBorder/2,0,0,frameBorder,frameH,frameBorder]
+  ].forEach(([x,y,z,w,h,d])=>{
+    const b=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),goldMat);
+    b.position.set(x,y,z); g.add(b);
+  });
+  // Canvas plane
+  const cv=document.createElement('canvas'); cv.width=512; cv.height=384;
+  const ctx=cv.getContext('2d');
+  ctx.fillStyle='#'+defaultColors[i].toString(16).padStart(6,'0');
+  ctx.fillRect(0,0,512,384);
+  ctx.fillStyle='rgba(200,146,42,0.15)';
+  // Default placeholder art
+  ctx.font='bold 32px sans-serif';
+  ctx.fillStyle='rgba(200,146,42,0.6)';
+  ctx.textAlign='center';
+  ctx.fillText('🖼️ กรอบที่ '+(i+1),256,192);
+  ctx.font='16px sans-serif';
+  ctx.fillText('อัปโหลดรูปภาพของคุณ',256,230);
+
+  const tex=new THREE.CanvasTexture(cv);
+  const plane=new THREE.Mesh(new THREE.PlaneGeometry(frameW,frameH),new THREE.MeshLambertMaterial({map:tex}));
+  plane.position.z=0.02; g.add(plane);
+
+  g.position.set(...fd.pos);
+  g.rotation.set(...fd.rot);
+  scene.add(g);
+  frames.push({group:g, canvas:cv, tex:tex, ctx:ctx, def:fd});
+});
+
+// Upload handler
+document.getElementById('imgInput').addEventListener('change',function(e){
+  const idx=parseInt(document.getElementById('frameSelect').value);
+  if(isNaN(idx)||idx<0||idx>=frames.length){
+    document.getElementById('frameStatus').textContent='⚠️ กรุณาเลือกกรอบก่อน';
+    return;
+  }
+  const file=e.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=function(ev){
+    const img=new Image();
+    img.onload=function(){
+      const fr=frames[idx];
+      fr.ctx.clearRect(0,0,512,384);
+      const ar=img.width/img.height;
+      let dw=512,dh=512/ar;
+      if(dh>384){dh=384;dw=384*ar;}
+      fr.ctx.drawImage(img,(512-dw)/2,(384-dh)/2,dw,dh);
+      fr.tex.needsUpdate=true;
+      document.getElementById('frameStatus').textContent='✅ อัปโหลดสำเร็จ!';
+      this.value='';
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  this.value='';
+});
+
+// --- FPS controls ---
+const keys={};
+document.addEventListener('keydown',e=>{ keys[e.code]=true; e.preventDefault&&['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)&&e.preventDefault(); });
+document.addEventListener('keyup',e=>{ keys[e.code]=false; });
+
+let yaw=0, pitch=0;
+let locked=false;
+const camEuler=new THREE.Euler(0,0,0,'YXZ');
+
+canvas.addEventListener('click',()=>{ canvas.requestPointerLock(); });
+document.addEventListener('pointerlockchange',()=>{ locked=document.pointerLockElement===canvas; });
+document.addEventListener('mousemove',e=>{
+  if(!locked) return;
+  yaw-=e.movementX*0.002;
+  pitch-=e.movementY*0.002;
+  pitch=Math.max(-1.0,Math.min(1.0,pitch));
+});
+
+const clock=new THREE.Clock();
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(),0.05);
+  const spd=3.5;
+  camEuler.set(pitch,yaw,0);
+  cam.quaternion.setFromEuler(camEuler);
+
+  const fwd=new THREE.Vector3(-Math.sin(yaw),0,-Math.cos(yaw));
+  const right=new THREE.Vector3(Math.cos(yaw),0,-Math.sin(yaw));
+  const move=new THREE.Vector3();
+  if(keys['KeyW']||keys['ArrowUp']) move.add(fwd);
+  if(keys['KeyS']||keys['ArrowDown']) move.sub(fwd);
+  if(keys['KeyA']||keys['ArrowLeft']) move.sub(right);
+  if(keys['KeyD']||keys['ArrowRight']) move.add(right);
+  if(move.lengthSq()>0) move.normalize();
+  cam.position.addScaledVector(move,spd*dt);
+
+  // Clamp inside room
+  const M=RW/2-0.5, ML=RL/2-0.5;
+  cam.position.x=Math.max(-M,Math.min(M,cam.position.x));
+  cam.position.z=Math.max(-ML,Math.min(ML,cam.position.z));
+  cam.position.y=1.7;
+
+  renderer.render(scene,cam);
+}
+loop();
+
+window.addEventListener('resize',()=>{
+  const nw=canvas.parentElement.clientWidth, nh=canvas.parentElement.clientHeight;
+  renderer.setSize(nw,nh);
+  cam.aspect=nw/nh; cam.updateProjectionMatrix();
+});
+})();
+</script>
